@@ -74,8 +74,66 @@ get_output <- function(config_file, model, vars, obs_depths = NULL, folder = "."
     }
 
     if("ice_height" %in% vars){
-      glm_out[[length(glm_out) + 1]] <- get_ice(file = file.path(folder, "GLM", "output",
-                                                                 "output.nc"))
+      ice_file <- file.path(folder, "GLM", "output", "output.nc")
+
+      get_glm_ice_height <- function(file, snow.rm = TRUE) {
+        get_component <- function(var_name) {
+          tryCatch(
+            glmtools::get_var(file = file, var_name = var_name),
+            error = function(e) NULL
+          )
+        }
+
+        # Newer GLM variable names
+        blue_ice <- get_component("blue_ice_thickness")
+        white_ice <- get_component("white_ice_thickness")
+        snow <- get_component("snow_thickness")
+
+        if(!is.null(blue_ice) && !is.null(white_ice)) {
+          ice <- blue_ice[, 1:2, drop = FALSE]
+          ice[, 2] <- blue_ice[, 2] + white_ice[, 2]
+          if(!snow.rm && !is.null(snow)) {
+            ice[, 2] <- ice[, 2] + snow[, 2]
+          }
+          return(ice)
+        }
+
+        # Legacy GLM variable names
+        hice <- get_component("hice")
+        hwice <- get_component("hwice")
+        hsnow <- get_component("hsnow")
+
+        if(!is.null(hice) && !is.null(hwice)) {
+          ice <- hice[, 1:2, drop = FALSE]
+          ice[, 2] <- hice[, 2] + hwice[, 2]
+          if(!snow.rm && !is.null(hsnow)) {
+            ice[, 2] <- ice[, 2] + hsnow[, 2]
+          }
+          return(ice)
+        }
+
+        stop("No recognized GLM ice variables found in output.nc")
+      }
+
+      glm_ice <- tryCatch(
+        get_glm_ice_height(file = ice_file),
+        error = function(e) {
+          # Some GLM setups do not write ice variables to output.nc; return NA ice with GLM timestamps.
+          message("GLM output has no recognized ice variables; returning NA for ice_height.")
+
+          fallback_time <- tryCatch(
+            glmtools::get_surface_height(file = ice_file)[, 1, drop = FALSE],
+            error = function(e2) {
+              glmtools::get_var(file = ice_file, var_name = "temp",
+                                reference = "surface", z_out = 0)[, 1, drop = FALSE]
+            }
+          )
+
+          data.frame(datetime = fallback_time[, 1], ice_height = NA_real_)
+        }
+      )
+
+      glm_out[[length(glm_out) + 1]] <- glm_ice
       colnames(glm_out[[length(glm_out)]]) <- c("datetime", "ice_height")
       names(glm_out)[length(glm_out)] <- "ice_height"
 
