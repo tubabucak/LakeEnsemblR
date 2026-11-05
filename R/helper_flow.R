@@ -222,9 +222,9 @@ format_flow_simstrat <- function(flow_file, levels, surf_flow, in_or_out, type,
     if(type == "discharge"){
       flow_line_1 <- "Time [d]\tQ_in [m2/s]"
     }else if(type == "temp"){
-      flow_line_1 <- "Time [d]\tT_in [degC]"
+      flow_line_1 <- "Time [d]\tT_in [degC m2/s]"
     }else if(type == "salt"){
-      flow_line_1 <- "Time [d]\tS_in [perMille]"
+      flow_line_1 <- "Time [d]\tS_in [perMille m2/s]"
     }
   }else if(in_or_out == "outflow" & type == "discharge"){
     flow_line_1 <- "Time [d]\tQ_out [m3/s]"
@@ -266,27 +266,31 @@ format_flow_simstrat <- function(flow_file, levels, surf_flow, in_or_out, type,
     col_header <- "Salinity_practicalSalinityUnits_"
   }
   
+  # In InflowMode 1, Simstrat integrates all values over depth and adds them as
+  # sources, so temp and salt must be given as the product of discharge and
+  # temp/salt (degC*m2/s; perMille*m2/s), not as temp/salt itself (Simstrat
+  # manual, "Manual inflow mode"; strat_lateral.f90 / strat_advection.f90).
+
   # first the deep flows
-  # deep flow discharges are bordered by 0s, temp and salt not
+  # deep flows are bordered by 0s, temp and salt are multiplied by discharge
   for(i in seq_len(length(levels))){
     if(surf_flow[i]) next
     if(type == "discharge"){
-      flow_line_4 <- paste(flow_line_4,
-                           rep(0, length(flow_file$datetime)),
-                           flow_file[, paste0(col_header, i)],
-                           rep(0, length(flow_file$datetime)),
-                           sep = "\t")
+      vals_deep <- flow_file[, paste0(col_header, i)]
     }else{
-      flow_line_4 <- paste(flow_line_4,
-                           flow_file[, paste0(col_header, i)],
-                           flow_file[, paste0(col_header, i)],
-                           flow_file[, paste0(col_header, i)],
-                           sep = "\t")
+      vals_deep <- flow_file[, paste0(col_header, i)] *
+        flow_file[, paste0("Flow_metersCubedPerSecond_", i)]
     }
+    flow_line_4 <- paste(flow_line_4,
+                         rep(0, length(flow_file$datetime)),
+                         vals_deep,
+                         rep(0, length(flow_file$datetime)),
+                         sep = "\t")
   }
   
   # then the surface flows
-  # all surface flows need to be summed (discharge) or weight-averaged (temp/salt)!
+  # all surface flows need to be summed (discharge) or summed as
+  # discharge * temp/salt (temp/salt)!
   if(any(surf_flow)){
     inds <- which(surf_flow)
     
@@ -294,14 +298,11 @@ format_flow_simstrat <- function(flow_file, levels, surf_flow, in_or_out, type,
       vals_to_enter <- rowSums(data.frame(flow_file[, paste0(col_header,
                                                              inds)]))
     }else{
-      # Weighted average: Sum(Flow_i * Temp/Salt_i) / Total_Flow
-      total_discharge <- rowSums(data.frame(flow_file[,
-                                                      paste0("Flow_metersCubedPerSecond_",
-                                                             inds)]))
+      # Sum(Flow_i * Temp/Salt_i)
       value_times_discharge <- data.frame(flow_file[, paste0(col_header, inds)]) *
         data.frame(flow_file[, paste0("Flow_metersCubedPerSecond_", inds)])
       
-      vals_to_enter <- rowSums(value_times_discharge) / total_discharge
+      vals_to_enter <- rowSums(value_times_discharge)
     }
     # if there were 0s remove NAs
     vals_to_enter[is.na(vals_to_enter)] <- 0
